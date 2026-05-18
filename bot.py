@@ -1,7 +1,7 @@
 import logging
 import os
 import json
-from datetime import datetime
+from datetime import datetime import pytz
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
@@ -106,7 +106,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text      = msg.text
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    wib = pytz.timezone("Asia/Jakarta") timestamp = datetime.now(wib).strftime("%Y-%m-%d %H:%M:%S")
 
     if ":" in text:
         data = parse_message(text)
