@@ -1,7 +1,6 @@
 import logging
 import os
 import json
-import re
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
@@ -54,10 +53,8 @@ def format_rupiah(value):
 # ── Format Jumlah Bongkaran (support desimal)
 def format_jumlah(value):
     try:
-        # Ganti koma jadi titik untuk proses
         value_clean = value.replace(",", ".").strip()
         angka = float(value_clean)
-        # Kembalikan ke format koma
         if angka == int(angka):
             return str(int(angka))
         else:
@@ -67,40 +64,34 @@ def format_jumlah(value):
 
 # ── Validasi NO ID
 def validasi_no_id(value):
-    # Hanya boleh angka
     if not value.isdigit():
         return False, "❌ NO ID hanya boleh angka!\nSilakan kirim ulang dengan format yang benar."
-    # Max 3 digit
     if len(value) > 3:
         return False, "❌ NO ID tidak boleh lebih dari 3 digit!\nSilakan kirim ulang dengan format yang benar."
     return True, ""
 
 # ── Validasi ID Penerima
 def validasi_id_penerima(value):
-    # Hanya boleh angka
     if not value.isdigit():
         return False, "❌ ID Penerima hanya boleh angka!\nSilakan kirim ulang dengan format yang benar."
     return True, ""
 
 # ── Validasi Jumlah Bongkaran
 def validasi_jumlah_bongkaran(value):
-    # Ganti koma jadi titik untuk validasi
     value_clean = value.replace(",", ".").strip()
-    # Cek apakah angka valid (boleh desimal)
     try:
-        angka = float(value_clean)
+        float(value_clean)
     except:
         return False, "❌ Jumlah Bongkaran hanya boleh angka!\nSilakan kirim ulang dengan format yang benar."
-    # Cek max 3 digit (bagian sebelum koma)
     bagian_depan = value_clean.split(".")[0]
     if len(bagian_depan) > 3:
         return False, "❌ Jumlah Bongkaran tidak boleh lebih dari 3 digit!\nSilakan kirim ulang dengan format yang benar."
     return True, ""
 
-# ── Rapikan sheet (hapus baris kosong + sort by timestamp)
+# ── Rapikan sheet
+# Hanya naikan baris jika tepat 1 baris kosong berturut-turut
 def rapikan_sheet(sheet):
     try:
-        # Ambil semua data
         all_data = sheet.get_all_values()
         if len(all_data) <= 1:
             return
@@ -108,23 +99,57 @@ def rapikan_sheet(sheet):
         header = all_data[0]
         rows   = all_data[1:]
 
-        # Hapus baris kosong
-        rows = [row for row in rows if any(cell.strip() for cell in row)]
+        # Tandai baris kosong
+        def is_empty(row):
+            return not any(cell.strip() for cell in row)
 
-        # Sort berdasarkan timestamp (kolom pertama = index 0)
+        # Hitung berapa baris kosong berturut-turut
+        new_rows = []
+        i = 0
+        while i < len(rows):
+            if is_empty(rows[i]):
+                # Cek apakah ini tepat 1 baris kosong
+                # Hitung berapa baris kosong berturut-turut mulai dari i
+                kosong_count = 0
+                j = i
+                while j < len(rows) and is_empty(rows[j]):
+                    kosong_count += 1
+                    j += 1
+                
+                if kosong_count == 1:
+                    # Tepat 1 baris kosong → skip (naikan baris di bawahnya)
+                    i += 1
+                else:
+                    # 2+ baris kosong → biarkan semua
+                    for k in range(kosong_count):
+                        new_rows.append(rows[i + k])
+                    i += kosong_count
+            else:
+                new_rows.append(rows[i])
+                i += 1
+
+        # Sort berdasarkan timestamp
         def get_timestamp(row):
             try:
                 return datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
             except:
                 return datetime.min
 
-        rows.sort(key=get_timestamp)
+        # Pisahkan baris kosong dan tidak kosong
+        data_rows  = [r for r in new_rows if not is_empty(r)]
+        empty_rows = [r for r in new_rows if is_empty(r)]
+
+        # Sort hanya baris yang ada datanya
+        data_rows.sort(key=get_timestamp)
+
+        # Gabungkan kembali
+        final_rows = data_rows + empty_rows
 
         # Tulis ulang ke sheet
         sheet.clear()
         sheet.append_row(header)
-        if rows:
-            sheet.append_rows(rows)
+        if final_rows:
+            sheet.append_rows(final_rows)
 
         logger.info("✅ Sheet berhasil dirapikan!")
     except Exception as e:
@@ -188,25 +213,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = parse_message(text)
 
         # ── Validasi NO ID
-        valid, error_msg = validasi_no_id(data["no_id"])
-        if not valid:
-            await msg.reply_text(error_msg)
-            return
+        if data["no_id"] != "-":
+            valid, error_msg = validasi_no_id(data["no_id"])
+            if not valid:
+                await msg.reply_text(error_msg)
+                return
 
         # ── Validasi ID Penerima
-        valid, error_msg = validasi_id_penerima(data["id_penerima"])
-        if not valid:
-            await msg.reply_text(error_msg)
-            return
+        if data["id_penerima"] != "-":
+            valid, error_msg = validasi_id_penerima(data["id_penerima"])
+            if not valid:
+                await msg.reply_text(error_msg)
+                return
 
         # ── Validasi Jumlah Bongkaran
-        valid, error_msg = validasi_jumlah_bongkaran(data["jumlah_bongkaran"])
-        if not valid:
-            await msg.reply_text(error_msg)
-            return
+        if data["jumlah_bongkaran"] != "-":
+            valid, error_msg = validasi_jumlah_bongkaran(data["jumlah_bongkaran"])
+            if not valid:
+                await msg.reply_text(error_msg)
+                return
 
         # ── Format Jumlah Bongkaran setelah validasi
-        data["jumlah_bongkaran"] = format_jumlah(data["jumlah_bongkaran"])
+        if data["jumlah_bongkaran"] != "-":
+            data["jumlah_bongkaran"] = format_jumlah(data["jumlah_bongkaran"])
 
         row = [
             timestamp,
