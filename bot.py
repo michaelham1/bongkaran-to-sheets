@@ -202,7 +202,9 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
 
         # Ambil tanggal terakhir
         try:
-            dt_terakhir = datetime.strptime(baris_terakhir[0], "%Y-%m-%d %H:%M:%S")
+            dt_terakhir = datetime.strptime(
+                baris_terakhir[0], "%Y-%m-%d %H:%M:%S"
+            )
         except:
             return
 
@@ -211,7 +213,15 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
         if dt_terakhir.date() >= dt_sekarang.date():
             return
 
-        # Hitung total jumlah bongkaran dan nominal hari terakhir
+        # Cek apakah total hari terakhir sudah ada
+        for row in all_data[1:]:
+            if is_total(row):
+                label = format_label_total(dt_terakhir)
+                if label in row[0]:
+                    logger.info("⚠️ Total sudah ada, skip!")
+                    return
+
+        # Hitung total hari terakhir
         total_jumlah  = 0.0
         total_nominal = 0
 
@@ -226,21 +236,23 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
             except:
                 continue
 
-        # Format total jumlah
+        # Format total
         if total_jumlah == int(total_jumlah):
             total_jumlah_str = str(int(total_jumlah))
         else:
             total_jumlah_str = str(total_jumlah).replace(".", ",")
 
-        # Format total nominal
         total_nominal_str = "Rp {:,.0f}".format(total_nominal).replace(",", ".")
 
-        # Baris total
+        # Tambah baris total
         label_total = format_label_total(dt_terakhir)
-        baris_total = [label_total, "", "", "", "", "", total_jumlah_str, total_nominal_str, "", "", ""]
+        baris_total = [
+            label_total, "", "", "", "", "",
+            total_jumlah_str, total_nominal_str, "", "", ""
+        ]
         sheet.append_row(baris_total)
 
-        # Baris pembatas hari baru
+        # Tambah pembatas hari baru
         label_pembatas = format_label_hari(dt_sekarang)
         baris_pembatas = [label_pembatas] + [""] * 10
         sheet.append_row(baris_pembatas)
@@ -248,7 +260,7 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
         # Format ulang
         format_ulang_sheet(sheet)
 
-        logger.info(f"✅ Total + pembatas ditambahkan!")
+        logger.info(f"✅ Total + pembatas ditambahkan: {label_total}")
 
     except Exception as e:
         logger.error(f"❌ Gagal tambah total + pembatas: {e}")
@@ -283,11 +295,11 @@ def rapikan_sheet(sheet):
                 new_rows.append(rows[i])
                 i += 1
 
-        # Pisahkan data, pembatas, total, kosong
-        data_rows     = [r for r in new_rows if not is_empty(r) and not is_pembatas(r) and not is_total(r)]
-        empty_rows    = [r for r in new_rows if is_empty(r)]
+        # Ambil hanya data rows
+        data_rows  = [r for r in new_rows if not is_empty(r) and not is_pembatas(r) and not is_total(r)]
+        empty_rows = [r for r in new_rows if is_empty(r)]
 
-        # Sort data berdasarkan timestamp
+        # Sort berdasarkan timestamp
         def get_timestamp(row):
             try:
                 return datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
@@ -296,22 +308,13 @@ def rapikan_sheet(sheet):
 
         data_rows.sort(key=get_timestamp)
 
-        # Susun ulang dengan total + pembatas di antara hari
-        final_rows   = []
-        current_date = None
-        prev_date    = None
-
-        # Kelompokkan data per hari
-        from itertools import groupby
-        from datetime import date as date_type
-
+        # Kelompokkan per hari
         def get_date(row):
             try:
                 return datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").date()
             except:
                 return None
 
-        # Grup data per tanggal
         grouped = {}
         for row in data_rows:
             d = get_date(row)
@@ -321,32 +324,52 @@ def rapikan_sheet(sheet):
 
         sorted_dates = sorted([d for d in grouped.keys() if d is not None])
 
+        # Hari ini WIB
+        hari_ini = datetime.now(WIB).date()
+
+        # Susun final rows
+        final_rows = []
+
         for i, d in enumerate(sorted_dates):
             rows_hari = grouped[d]
             final_rows.extend(rows_hari)
 
-            # Kalau bukan hari terakhir → tambah total
+            # Jangan total hari ini yang masih berjalan
+            if d >= hari_ini:
+                if i < len(sorted_dates) - 1:
+                    dt_next = datetime.combine(
+                        sorted_dates[i+1], datetime.min.time()
+                    )
+                    label_p = format_label_hari(dt_next)
+                    final_rows.append([label_p] + [""] * 10)
+                continue
+
+            # Hitung total hari yang sudah selesai
+            tj = sum(parse_jumlah(r[6]) for r in rows_hari)
+            tn = sum(parse_rupiah(r[7]) for r in rows_hari)
+
+            tj_str = str(int(tj)) if tj == int(tj) else str(tj).replace(".", ",")
+            tn_str = "Rp {:,.0f}".format(tn).replace(",", ".")
+
+            dt_hari     = datetime.combine(d, datetime.min.time())
+            label_total = format_label_total(dt_hari)
+            final_rows.append([
+                label_total, "", "", "", "", "",
+                tj_str, tn_str, "", "", ""
+            ])
+
+            # Pembatas hari berikutnya
             if i < len(sorted_dates) - 1:
-                # Hitung total
-                tj = sum(parse_jumlah(r[6]) for r in rows_hari)
-                tn = sum(parse_rupiah(r[7]) for r in rows_hari)
-
-                tj_str = str(int(tj)) if tj == int(tj) else str(tj).replace(".", ",")
-                tn_str = "Rp {:,.0f}".format(tn).replace(",", ".")
-
-                dt_hari = datetime.combine(d, datetime.min.time())
-                label_t = format_label_total(dt_hari)
-                final_rows.append([label_t, "", "", "", "", "", tj_str, tn_str, "", "", ""])
-
-                # Tambah pembatas hari berikutnya
-                dt_next = datetime.combine(sorted_dates[i+1], datetime.min.time())
+                dt_next = datetime.combine(
+                    sorted_dates[i+1], datetime.min.time()
+                )
                 label_p = format_label_hari(dt_next)
                 final_rows.append([label_p] + [""] * 10)
 
         # Tambah baris kosong di akhir
         final_rows += empty_rows
 
-        # Tulis ulang
+        # Tulis ulang ke sheet
         sheet.clear()
         sheet.append_row(header)
         if final_rows:
@@ -362,11 +385,16 @@ def rapikan_sheet(sheet):
 # ── Parse pesan
 def parse_message(text):
     data = {
-        "id_pengirim": "-", "username_pengirim": "-",
-        "no_id": "-", "id_penerima": "-",
-        "jumlah_bongkaran": "-", "nominal": "-",
-        "bank_ewallet": "-", "nomor": "-",
-        "an": "-", "wa": "-",
+        "id_pengirim"      : "-",
+        "username_pengirim": "-",
+        "no_id"            : "-",
+        "id_penerima"      : "-",
+        "jumlah_bongkaran" : "-",
+        "nominal"          : "-",
+        "bank_ewallet"     : "-",
+        "nomor"            : "-",
+        "an"               : "-",
+        "wa"               : "-",
     }
     for line in text.strip().split("\n"):
         if ":" not in line:
@@ -408,7 +436,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ":" in text:
         data = parse_message(text)
 
-        # Validasi
+        # ── Validasi
         if data["wa"] != "-":
             valid, error_msg = validasi_wa(data["wa"])
             if not valid:
@@ -439,30 +467,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text(error_msg)
                 return
 
-        # Format
+        # ── Format setelah validasi
         if data["jumlah_bongkaran"] != "-":
             data["jumlah_bongkaran"] = format_jumlah(data["jumlah_bongkaran"])
         if data["nominal"] != "-":
             data["nominal"] = format_rupiah(data["nominal"])
 
         row = [
-            timestamp, data["wa"], data["id_pengirim"],
-            data["username_pengirim"], data["no_id"], data["id_penerima"],
-            data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
-            data["nomor"], data["an"],
+            timestamp,
+            data["wa"],
+            data["id_pengirim"],
+            data["username_pengirim"],
+            data["no_id"],
+            data["id_penerima"],
+            data["jumlah_bongkaran"],
+            data["nominal"],
+            data["bank_ewallet"],
+            data["nomor"],
+            data["an"],
         ]
 
         try:
             sheet = get_sheet()
 
-            # Tambah total + pembatas jika hari berganti
+            # ── Tambah total + pembatas jika hari berganti
             tambah_total_dan_pembatas(sheet, timestamp)
 
-            # Simpan data
+            # ── Simpan data baru
             sheet.append_row(row)
             logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
 
-            # Rapikan
+            # ── Rapikan sheet
             rapikan_sheet(sheet)
 
             await msg.reply_text(
