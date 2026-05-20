@@ -40,7 +40,7 @@ BULAN = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# ── Pending data (menunggu konfirmasi button)
+# ── Pending data
 pending_data = {}
 
 # ── Google Sheets Setup
@@ -113,9 +113,15 @@ def parse_jumlah(value):
     except:
         return 0
 
+# ── Format string total jumlah
+def format_total_jumlah(total):
+    if total == int(total):
+        return str(int(total))
+    return str(round(total, 10)).replace(".", ",")
+
 # ── Cek konfirmasi
 def perlu_konfirmasi_jumlah(value):
-    value_clean = str(value).replace(",", ".").strip()
+    value_clean  = str(value).replace(",", ".").strip()
     bagian_depan = value_clean.split(".")[0]
     return len(bagian_depan) == 3
 
@@ -145,7 +151,7 @@ def validasi_id_penerima(value):
     return True, ""
 
 def validasi_jumlah_bongkaran(value):
-    value_clean = str(value).replace(",", ".").strip()
+    value_clean  = str(value).replace(",", ".").strip()
     try:
         float(value_clean)
     except:
@@ -185,8 +191,8 @@ def format_ulang_sheet(sheet):
     except Exception as e:
         logger.error(f"❌ Gagal format: {e}")
 
-# ── Hitung total HANYA untuk tanggal tertentu
-def hitung_total_hari(all_data, target_date):
+# ── Hitung total HANYA untuk 1 hari tertentu
+def hitung_total_satu_hari(all_data, target_date):
     total_jumlah  = 0.0
     total_nominal = 0
     for row in all_data[1:]:
@@ -194,9 +200,10 @@ def hitung_total_hari(all_data, target_date):
             continue
         try:
             dt_row = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-            if dt_row.date() == target_date:
-                total_jumlah  += parse_jumlah(row[6])
-                total_nominal += parse_rupiah(row[7])
+            if dt_row.date() != target_date:
+                continue
+            total_jumlah  += parse_jumlah(row[6])
+            total_nominal += parse_rupiah(row[7])
         except:
             continue
     return total_jumlah, total_nominal
@@ -234,19 +241,18 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
         label_total = format_label_total(dt_terakhir)
         for row in all_data[1:]:
             if is_total(row) and label_total in str(row[0]):
+                logger.info(f"⚠️ Total sudah ada: {label_total}")
                 return
 
         # Hitung total HANYA hari terakhir
-        total_jumlah, total_nominal = hitung_total_hari(
+        total_jumlah, total_nominal = hitung_total_satu_hari(
             all_data, dt_terakhir.date()
         )
 
-        if total_jumlah == int(total_jumlah):
-            tj_str = str(int(total_jumlah))
-        else:
-            tj_str = str(round(total_jumlah, 10)).replace(".", ",")
-
+        tj_str = format_total_jumlah(total_jumlah)
         tn_str = format_rupiah(str(total_nominal))
+
+        logger.info(f"📊 Total {label_total}: Jumlah={tj_str} Nominal={tn_str}")
 
         # Tambah baris total
         sheet.append_row([
@@ -304,6 +310,7 @@ def rapikan_sheet(sheet):
 
         data_rows.sort(key=get_ts)
 
+        # Kelompokkan per hari
         grouped = {}
         for row in data_rows:
             try:
@@ -325,17 +332,14 @@ def rapikan_sheet(sheet):
             final_rows.extend(rows_hari)
 
             # Total hanya hari yang sudah selesai
-            # Hitung HANYA dari data hari itu saja
+            # Hitung HANYA dari rows_hari (data hari itu saja!)
             if d < hari_ini:
                 tj = sum(parse_jumlah(r[6]) for r in rows_hari)
                 tn = sum(parse_rupiah(r[7]) for r in rows_hari)
 
-                if tj == int(tj):
-                    tj_str = str(int(tj))
-                else:
-                    tj_str = str(round(tj, 10)).replace(".", ",")
-
+                tj_str = format_total_jumlah(tj)
                 tn_str = format_rupiah(str(tn))
+
                 final_rows.append([
                     format_label_total(dt_hari),
                     "", "", "", "", "",
@@ -482,12 +486,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
         }
-
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|jumlah|{msg.message_id}"),
             InlineKeyboardButton("B", callback_data=f"B|jumlah|{msg.message_id}"),
         ]])
-
         bot_msg = await msg.reply_text(
             f"❓ {username} Jumlah Bongkaran {jumlah_raw} ini M atau B?",
             reply_markup=keyboard
@@ -496,7 +498,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif butuh_konfirmasi_nominal:
         data["jumlah_bongkaran"] = format_jumlah(jumlah_raw) if jumlah_raw != "-" else "-"
-
         pending_data[msg.message_id] = {
             "data"        : data,
             "timestamp"   : timestamp,
@@ -506,15 +507,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
         }
-
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|nominal|{msg.message_id}"),
             InlineKeyboardButton("B", callback_data=f"B|nominal|{msg.message_id}"),
         ]])
-
-        nominal_formatted = format_rupiah(data["nominal"])
         bot_msg = await msg.reply_text(
-            f"❓ {username} Nominal {nominal_formatted} ini M atau B?",
+            f"❓ {username} Nominal {format_rupiah(data['nominal'])} ini M atau B?",
             reply_markup=keyboard
         )
         pending_data[msg.message_id]["bot_msg_id"] = bot_msg.message_id
@@ -534,7 +532,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sheet = get_sheet()
             simpan_ke_sheet(sheet, row, timestamp)
             logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
-
             bot_msg = await msg.reply_text(buat_teks_konfirmasi(data))
             context.bot_data[msg.message_id] = {
                 "bot_msg_id" : bot_msg.message_id,
@@ -589,7 +586,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
                 data["nomor"], data["an"],
             ]
-
             try:
                 sheet = get_sheet()
                 simpan_ke_sheet(sheet, row, timestamp)
@@ -603,12 +599,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"❌ Failed: {e}")
                 await query.edit_message_text("❌ Gagal menyimpan data!")
-
             del pending_data[orig_msg_id]
 
         else:  # B
             data["jumlah_bongkaran"] = format_jumlah(data["jumlah_bongkaran"])
-
             if perlu_konfirmasi_nominal(data["nominal"]):
                 pending["step"] = "nominal"
                 keyboard = InlineKeyboardMarkup([[
@@ -640,7 +634,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"❌ Failed: {e}")
                     await query.edit_message_text("❌ Gagal menyimpan data!")
-
                 del pending_data[orig_msg_id]
 
     elif step == "nominal":
@@ -656,7 +649,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
             data["nomor"], data["an"],
         ]
-
         try:
             sheet = get_sheet()
             simpan_ke_sheet(sheet, row, timestamp)
@@ -670,7 +662,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"❌ Failed: {e}")
             await query.edit_message_text("❌ Gagal menyimpan data!")
-
         del pending_data[orig_msg_id]
 
 # ── Main
