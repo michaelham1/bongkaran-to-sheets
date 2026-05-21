@@ -40,7 +40,7 @@ BULAN = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# ── Pending data (menunggu konfirmasi M/B)
+# ── Pending data
 pending_data = {}
 
 # ── Simpan mapping pesan → data sheet
@@ -121,7 +121,7 @@ def format_total_jumlah(total):
         return str(int(total))
     return str(round(total, 10)).replace(".", ",")
 
-# ── Cek konfirmasi M/B
+# ── Cek konfirmasi
 def perlu_konfirmasi_jumlah(value):
     value_clean  = str(value).replace(",", ".").strip()
     bagian_depan = value_clean.split(".")[0]
@@ -440,18 +440,23 @@ async def proses_pesan(msg, context, is_edit=False):
     if not msg or not msg.text:
         return
 
-    text      = msg.text
-    timestamp = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
-    user_id   = msg.from_user.id
-    username  = f"@{msg.from_user.username}" if msg.from_user.username else msg.from_user.first_name
-    chat_id   = msg.chat_id
+    user_id  = msg.from_user.id
+    username = f"@{msg.from_user.username}" if msg.from_user.username else msg.from_user.first_name
+    chat_id  = msg.chat_id
+    text     = msg.text
 
     if ":" not in text:
         return
 
-    # ── Kalau edit, hapus data lama dulu
+    # ── Tentukan timestamp
+    # Kalau edit → pakai timestamp LAMA (dari saved_messages)
+    # Kalau baru → pakai timestamp sekarang
     if is_edit and msg.message_id in saved_messages:
-        old_info = saved_messages[msg.message_id]
+        old_info  = saved_messages[msg.message_id]
+        timestamp = old_info["timestamp"]  # ← pakai timestamp lama!
+        logger.info(f"✅ Edit detected, pakai timestamp lama: {timestamp}")
+
+        # Hapus data lama dari sheet
         try:
             sheet = get_sheet()
             hapus_dari_sheet(sheet, old_info["timestamp"])
@@ -463,6 +468,9 @@ async def proses_pesan(msg, context, is_edit=False):
         except Exception as e:
             logger.error(f"❌ Gagal hapus data lama: {e}")
         del saved_messages[msg.message_id]
+
+    else:
+        timestamp = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
 
     data = parse_message(text)
 
@@ -497,7 +505,7 @@ async def proses_pesan(msg, context, is_edit=False):
             await msg.reply_text(error_msg)
             return
 
-    # ── Cek konfirmasi M/B
+    # ── Cek konfirmasi
     jumlah_raw               = data["jumlah_bongkaran"]
     butuh_konfirmasi_jumlah  = perlu_konfirmasi_jumlah(jumlah_raw) if jumlah_raw != "-" else False
     butuh_konfirmasi_nominal = perlu_konfirmasi_nominal(data["nominal"]) if data["nominal"] != "-" else False
@@ -575,19 +583,18 @@ async def proses_pesan(msg, context, is_edit=False):
             logger.error(f"❌ Failed: {e}")
             await msg.reply_text("❌ Gagal menyimpan data!")
 
-# ── Handler pesan baru
+# ── Handler pesan baru dan edited
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.edited_message:
         await proses_pesan(update.edited_message, context, is_edit=True)
     elif update.message:
         await proses_pesan(update.message, context, is_edit=False)
 
-# ── Handler callback (M/B dan Hapus)
+# ── Handler callback
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query    = update.callback_query
-    user_id  = query.from_user.id
-    username = f"@{query.from_user.username}" if query.from_user.username else query.from_user.first_name
-    chat_id  = query.message.chat_id
+    query   = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
 
     await query.answer()
 
@@ -600,7 +607,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         orig_msg_id   = int(parts[1])
         owner_user_id = int(parts[2])
 
-        # Cek apakah admin
         is_admin = False
         try:
             member   = await context.bot.get_chat_member(chat_id, user_id)
@@ -608,26 +614,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-        # Cek apakah pengirim atau admin
         if user_id != owner_user_id and not is_admin:
             await query.answer(
-                f"❌ Hanya pengirim atau admin yang bisa hapus data ini!",
+                "❌ Hanya pengirim atau admin yang bisa hapus data ini!",
                 show_alert=True
             )
             return
 
-        # Hapus data dari sheet
         if orig_msg_id in saved_messages:
             info = saved_messages[orig_msg_id]
             try:
                 sheet = get_sheet()
                 hapus_dari_sheet(sheet, info["timestamp"])
-                logger.info(f"✅ Data dihapus via tombol: {info['timestamp']}")
-
-                # Edit pesan konfirmasi jadi notif terhapus
                 await query.edit_message_text("🗑️ Data berhasil dihapus!")
-
                 del saved_messages[orig_msg_id]
+                logger.info(f"✅ Data dihapus via tombol")
             except Exception as e:
                 logger.error(f"❌ Gagal hapus: {e}")
                 await query.edit_message_text("❌ Gagal menghapus data!")
