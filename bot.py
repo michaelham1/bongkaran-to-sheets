@@ -410,13 +410,26 @@ def parse_message(text):
             data["wa"] = value
     return data
 
-# ── Buat keyboard hapus
+# ── Keyboard tombol hapus
 def buat_keyboard_hapus(orig_msg_id, user_id):
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(
             "🗑️ Hapus Data",
             callback_data=f"HAPUS|{orig_msg_id}|{user_id}"
         )
+    ]])
+
+# ── Keyboard konfirmasi hapus
+def buat_keyboard_konfirmasi_hapus(orig_msg_id, user_id):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "✅ Ya, Hapus",
+            callback_data=f"HAPUS_YA|{orig_msg_id}|{user_id}"
+        ),
+        InlineKeyboardButton(
+            "❌ Batal",
+            callback_data=f"HAPUS_BATAL|{orig_msg_id}|{user_id}"
+        ),
     ]])
 
 # ── Buat teks konfirmasi
@@ -449,14 +462,10 @@ async def proses_pesan(msg, context, is_edit=False):
         return
 
     # ── Tentukan timestamp
-    # Kalau edit → pakai timestamp LAMA (dari saved_messages)
-    # Kalau baru → pakai timestamp sekarang
     if is_edit and msg.message_id in saved_messages:
         old_info  = saved_messages[msg.message_id]
-        timestamp = old_info["timestamp"]  # ← pakai timestamp lama!
-        logger.info(f"✅ Edit detected, pakai timestamp lama: {timestamp}")
-
-        # Hapus data lama dari sheet
+        timestamp = old_info["timestamp"]
+        logger.info(f"✅ Edit detected, timestamp lama: {timestamp}")
         try:
             sheet = get_sheet()
             hapus_dari_sheet(sheet, old_info["timestamp"])
@@ -468,7 +477,6 @@ async def proses_pesan(msg, context, is_edit=False):
         except Exception as e:
             logger.error(f"❌ Gagal hapus data lama: {e}")
         del saved_messages[msg.message_id]
-
     else:
         timestamp = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -505,7 +513,7 @@ async def proses_pesan(msg, context, is_edit=False):
             await msg.reply_text(error_msg)
             return
 
-    # ── Cek konfirmasi
+    # ── Cek konfirmasi M/B
     jumlah_raw               = data["jumlah_bongkaran"]
     butuh_konfirmasi_jumlah  = perlu_konfirmasi_jumlah(jumlah_raw) if jumlah_raw != "-" else False
     butuh_konfirmasi_nominal = perlu_konfirmasi_nominal(data["nominal"]) if data["nominal"] != "-" else False
@@ -583,7 +591,7 @@ async def proses_pesan(msg, context, is_edit=False):
             logger.error(f"❌ Failed: {e}")
             await msg.reply_text("❌ Gagal menyimpan data!")
 
-# ── Handler pesan baru dan edited
+# ── Handler pesan
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.edited_message:
         await proses_pesan(update.edited_message, context, is_edit=True)
@@ -598,8 +606,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    # ── Handle tombol HAPUS
+    # ── Tombol HAPUS (tampilkan konfirmasi)
     if query.data.startswith("HAPUS|"):
+        parts = query.data.split("|")
+        if len(parts) != 3:
+            return
+
+        orig_msg_id   = int(parts[1])
+        owner_user_id = int(parts[2])
+
+        is_admin = False
+        try:
+            member   = await context.bot.get_chat_member(chat_id, user_id)
+            is_admin = member.status in ["administrator", "creator"]
+        except:
+            pass
+
+        if user_id != owner_user_id and not is_admin:
+            await query.answer(
+                "❌ Hanya pengirim atau admin yang bisa hapus data ini!",
+                show_alert=True
+            )
+            return
+
+        # Tampilkan konfirmasi hapus
+        await query.edit_message_reply_markup(
+            reply_markup=buat_keyboard_konfirmasi_hapus(orig_msg_id, owner_user_id)
+        )
+        return
+
+    # ── Tombol HAPUS_YA (konfirmasi hapus)
+    if query.data.startswith("HAPUS_YA|"):
         parts = query.data.split("|")
         if len(parts) != 3:
             return
@@ -634,6 +671,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("❌ Gagal menghapus data!")
         else:
             await query.edit_message_text("⚠️ Data tidak ditemukan atau sudah dihapus!")
+        return
+
+    # ── Tombol HAPUS_BATAL (batalkan hapus)
+    if query.data.startswith("HAPUS_BATAL|"):
+        parts = query.data.split("|")
+        if len(parts) != 3:
+            return
+
+        orig_msg_id   = int(parts[1])
+        owner_user_id = int(parts[2])
+
+        # Kembalikan ke tombol hapus semula
+        if orig_msg_id in saved_messages:
+            await query.edit_message_reply_markup(
+                reply_markup=buat_keyboard_hapus(orig_msg_id, owner_user_id)
+            )
         return
 
     # ── Handle button M/B
