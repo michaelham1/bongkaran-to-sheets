@@ -9,7 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, MessageHandler, EditedMessageHandler,
+    Application, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
 
@@ -40,11 +40,10 @@ BULAN = {
     9: "SEPTEMBER", 10: "OKTOBER", 11: "NOVEMBER", 12: "DESEMBER"
 }
 
-# ── Pending data (menunggu konfirmasi button)
+# ── Pending data
 pending_data = {}
 
 # ── Simpan mapping pesan → data sheet
-# Format: {original_msg_id: {bot_msg_id, timestamp, user_id, chat_id}}
 saved_messages = {}
 
 # ── Google Sheets Setup
@@ -350,15 +349,15 @@ def rapikan_sheet(sheet):
     except Exception as e:
         logger.error(f"❌ Gagal rapikan: {e}")
 
-# ── Hapus data dari sheet berdasarkan timestamp
+# ── Hapus data dari sheet
 def hapus_dari_sheet(sheet, timestamp):
     try:
-        all_data = sheet.get_all_values()
-        header   = all_data[0]
-        rows     = all_data[1:]
-
+        all_data  = sheet.get_all_values()
+        header    = all_data[0]
+        rows      = all_data[1:]
         new_rows  = []
         ditemukan = False
+
         for row in rows:
             if (not is_special(row) and
                     len(row) > 0 and
@@ -373,11 +372,11 @@ def hapus_dari_sheet(sheet, timestamp):
             if new_rows:
                 sheet.append_rows(new_rows)
             rapikan_sheet(sheet)
-            logger.info(f"✅ Data dihapus dari sheet: {timestamp}")
+            logger.info(f"✅ Data dihapus: {timestamp}")
             return True
         return False
     except Exception as e:
-        logger.error(f"❌ Gagal hapus data: {e}")
+        logger.error(f"❌ Gagal hapus: {e}")
         return False
 
 # ── Simpan ke sheet
@@ -439,7 +438,7 @@ def buat_teks_konfirmasi(data):
         f"📱 WA            : {data['wa']}"
     )
 
-# ── Proses pesan (dipakai untuk pesan baru dan edited)
+# ── Proses pesan (baru dan edited)
 async def proses_pesan(msg, context, is_edit=False):
     if not msg or not msg.text:
         return
@@ -458,7 +457,6 @@ async def proses_pesan(msg, context, is_edit=False):
         try:
             sheet = get_sheet()
             hapus_dari_sheet(sheet, old_info["timestamp"])
-            # Hapus pesan konfirmasi lama
             await context.bot.delete_message(
                 chat_id=old_info["chat_id"],
                 message_id=old_info["bot_msg_id"]
@@ -565,8 +563,6 @@ async def proses_pesan(msg, context, is_edit=False):
             logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
 
             bot_msg = await msg.reply_text(buat_teks_konfirmasi(data))
-
-            # Simpan mapping untuk fitur hapus
             saved_messages[msg.message_id] = {
                 "bot_msg_id" : bot_msg.message_id,
                 "timestamp"  : timestamp,
@@ -588,7 +584,6 @@ async def handle_edited_message(update: Update, context: ContextTypes.DEFAULT_TY
 # ── Handler pesan dihapus
 async def handle_deleted_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Telegram kirim update saat pesan dihapus
         if not hasattr(update, 'message') or not update.message:
             return
 
@@ -596,7 +591,6 @@ async def handle_deleted_message(update: Update, context: ContextTypes.DEFAULT_T
         chat_id = msg.chat_id
         user_id = msg.from_user.id if msg.from_user else None
 
-        # Cek apakah admin
         is_admin = False
         try:
             member   = await context.bot.get_chat_member(chat_id, user_id)
@@ -604,18 +598,13 @@ async def handle_deleted_message(update: Update, context: ContextTypes.DEFAULT_T
         except:
             pass
 
-        # Cari di saved_messages
         for orig_id, info in list(saved_messages.items()):
             if info.get("chat_id") != chat_id:
                 continue
-
-            # Cek pengirim atau admin
             if user_id == info.get("user_id") or is_admin:
                 try:
                     sheet = get_sheet()
                     hapus_dari_sheet(sheet, info["timestamp"])
-
-                    # Hapus pesan konfirmasi bot
                     try:
                         await context.bot.delete_message(
                             chat_id=chat_id,
@@ -623,7 +612,6 @@ async def handle_deleted_message(update: Update, context: ContextTypes.DEFAULT_T
                         )
                     except:
                         pass
-
                     del saved_messages[orig_id]
                     logger.info(f"✅ Data & pesan bot dihapus")
                 except Exception as e:
@@ -758,7 +746,7 @@ def main():
     logger.info("🚀 Bot starting...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-    app.add_handler(EditedMessageHandler(filters.ALL, handle_edited_message))
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_edited_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
     logger.info("✅ Bot is running. Waiting for messages...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
