@@ -122,9 +122,19 @@ def perlu_konfirmasi_nominal(value):
     except:
         return False
 
+# ── Bersihkan nomor WA
+def bersihkan_wa(value):
+    return re.sub(r'[^0-9]', '', value)
+
+# ── Validasi
 def validasi_wa(value):
-    if not re.match(r'^62[\s\d\-]+\d$', value):
-        return False, "❌ Format Nomor Whatsapp salah!\nFormat yang benar: 62 8XX-XXXX-XXXX\nTidak boleh ada karakter lain di ujung!"
+    if not value or value == "-":
+        return True, ""
+    if re.search(r'[a-zA-Z]', value):
+        return False, "❌ Nomor Whatsapp tidak boleh ada huruf!\nContoh: 628123456789 atau 08123456789"
+    bersih = bersihkan_wa(value.strip())
+    if len(bersih) < 9:
+        return False, f"❌ Nomor Whatsapp terlalu pendek!\nKamu masukan: {bersih}\nMinimal 9 digit"
     return True, ""
 
 def validasi_no_id(value):
@@ -233,16 +243,13 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
 
         sheet.append_row([label_total, "", "", "", "", "", tj_str, tn_str, "", "", ""])
         format_baris_baru(sheet, total_rows + 1, "total")
-
         sheet.append_row([format_label_hari(dt_sekarang)] + [""] * 10)
         format_baris_baru(sheet, total_rows + 2, "pembatas")
-
         logger.info(f"✅ Total + pembatas: {label_total}")
 
     except Exception as e:
         logger.error(f"❌ Gagal tambah total: {e}")
 
-# ── Sort + format (HANYA saat edit atau hapus)
 def sort_dan_format(sheet, row_baru=None):
     try:
         all_data = sheet.get_all_values()
@@ -252,7 +259,6 @@ def sort_dan_format(sheet, row_baru=None):
         header    = all_data[0]
         data_rows = [r for r in all_data[1:] if not is_special(r)]
 
-        # Tambahkan row baru ke data sebelum sort
         if row_baru is not None:
             data_rows.append(row_baru)
 
@@ -303,7 +309,6 @@ def sort_dan_format(sheet, row_baru=None):
         if final_rows:
             sheet.append_rows(final_rows)
 
-        # Format hanya baris special
         all_data_baru = sheet.get_all_values()
         for idx, row in enumerate(all_data_baru[1:], start=2):
             if is_pembatas(row):
@@ -424,7 +429,6 @@ async def proses_pesan(msg, context, is_edit=False):
     if ":" not in text:
         return
 
-    # ── Tentukan timestamp
     if is_edit and msg.message_id in saved_messages:
         old_info  = saved_messages[msg.message_id]
         timestamp = old_info["timestamp"]
@@ -474,6 +478,10 @@ async def proses_pesan(msg, context, is_edit=False):
         if not valid:
             await msg.reply_text(error_msg)
             return
+
+    # ── Bersihkan WA
+    if data["wa"] != "-":
+        data["wa"] = bersihkan_wa(data["wa"])
 
     # ── Cek konfirmasi M/B
     jumlah_raw               = data["jumlah_bongkaran"]
@@ -540,12 +548,10 @@ async def proses_pesan(msg, context, is_edit=False):
             sheet = get_sheet()
 
             if is_edit:
-                # Edit → sort sekalian masukkan row baru
                 tambah_total_dan_pembatas(sheet, timestamp)
                 sort_dan_format(sheet, row_baru=row)
                 logger.info(f"✅ Saved+Sorted | {data['username_pengirim']} | WA: {data['wa']}")
             else:
-                # Pesan baru → append saja
                 tambah_total_dan_pembatas(sheet, timestamp)
                 sheet.append_row(row)
                 logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
@@ -577,7 +583,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    # ── Tombol HAPUS
     if query.data.startswith("HAPUS|"):
         parts = query.data.split("|")
         if len(parts) != 3:
@@ -604,7 +609,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Tombol HAPUS_YA
     if query.data.startswith("HAPUS_YA|"):
         parts = query.data.split("|")
         if len(parts) != 3:
@@ -642,7 +646,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ Data tidak ditemukan atau sudah dihapus!")
         return
 
-    # ── Tombol HAPUS_BATAL
     if query.data.startswith("HAPUS_BATAL|"):
         parts = query.data.split("|")
         if len(parts) != 3:
