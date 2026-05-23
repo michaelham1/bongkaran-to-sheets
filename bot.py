@@ -122,11 +122,9 @@ def perlu_konfirmasi_nominal(value):
     except:
         return False
 
-# ── Bersihkan nomor WA
 def bersihkan_wa(value):
     return re.sub(r'[^0-9]', '', value)
 
-# ── Validasi
 def validasi_wa(value):
     if not value or value == "-":
         return True, ""
@@ -250,76 +248,6 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
     except Exception as e:
         logger.error(f"❌ Gagal tambah total: {e}")
 
-def sort_dan_format(sheet, row_baru=None):
-    try:
-        all_data = sheet.get_all_values()
-        if len(all_data) <= 1:
-            return
-
-        header    = all_data[0]
-        data_rows = [r for r in all_data[1:] if not is_special(r)]
-
-        if row_baru is not None:
-            data_rows.append(row_baru)
-
-        def get_ts(row):
-            try:
-                return datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-            except:
-                return datetime.min
-
-        data_rows.sort(key=get_ts)
-
-        grouped = {}
-        for row in data_rows:
-            try:
-                d = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").date()
-            except:
-                d = None
-            if d not in grouped:
-                grouped[d] = []
-            grouped[d].append(row)
-
-        sorted_dates = sorted([d for d in grouped.keys() if d is not None])
-        hari_ini     = datetime.now(WIB).date()
-        final_rows   = []
-
-        for i, d in enumerate(sorted_dates):
-            rows_hari = grouped[d]
-            dt_hari   = datetime.combine(d, datetime.min.time())
-
-            final_rows.extend(rows_hari)
-
-            if d < hari_ini:
-                tj = sum(parse_jumlah(r[6]) for r in rows_hari)
-                tn = sum(parse_rupiah(r[7]) for r in rows_hari)
-                final_rows.append([
-                    format_label_total(dt_hari),
-                    "", "", "", "", "",
-                    format_total_jumlah(tj),
-                    format_rupiah(str(tn)),
-                    "", "", ""
-                ])
-                if i < len(sorted_dates) - 1:
-                    dt_next = datetime.combine(sorted_dates[i+1], datetime.min.time())
-                    final_rows.append([format_label_hari(dt_next)] + [""] * 10)
-
-        sheet.clear()
-        sheet.append_row(header)
-        if final_rows:
-            sheet.append_rows(final_rows)
-
-        all_data_baru = sheet.get_all_values()
-        for idx, row in enumerate(all_data_baru[1:], start=2):
-            if is_pembatas(row):
-                format_baris_baru(sheet, idx, "pembatas")
-            elif is_total(row):
-                format_baris_baru(sheet, idx, "total")
-
-        logger.info("✅ Sheet di-sort dan diformat!")
-    except Exception as e:
-        logger.error(f"❌ Gagal sort: {e}")
-
 def hapus_dari_sheet(sheet, timestamp):
     try:
         all_data  = sheet.get_all_values()
@@ -429,6 +357,7 @@ async def proses_pesan(msg, context, is_edit=False):
     if ":" not in text:
         return
 
+    # ── Tentukan timestamp
     if is_edit and msg.message_id in saved_messages:
         old_info  = saved_messages[msg.message_id]
         timestamp = old_info["timestamp"]
@@ -498,7 +427,6 @@ async def proses_pesan(msg, context, is_edit=False):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
             "chat_id"     : chat_id,
-            "is_edit"     : is_edit,
         }
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|jumlah|{msg.message_id}"),
@@ -521,7 +449,6 @@ async def proses_pesan(msg, context, is_edit=False):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
             "chat_id"     : chat_id,
-            "is_edit"     : is_edit,
         }
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|nominal|{msg.message_id}"),
@@ -546,15 +473,9 @@ async def proses_pesan(msg, context, is_edit=False):
 
         try:
             sheet = get_sheet()
-
-            if is_edit:
-                tambah_total_dan_pembatas(sheet, timestamp)
-                sort_dan_format(sheet, row_baru=row)
-                logger.info(f"✅ Saved+Sorted | {data['username_pengirim']} | WA: {data['wa']}")
-            else:
-                tambah_total_dan_pembatas(sheet, timestamp)
-                sheet.append_row(row)
-                logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
+            tambah_total_dan_pembatas(sheet, timestamp)
+            sheet.append_row(row)
+            logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
 
             bot_msg = await msg.reply_text(
                 buat_teks_konfirmasi(data),
@@ -635,7 +556,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 sheet = get_sheet()
                 hapus_dari_sheet(sheet, info["timestamp"])
-                sort_dan_format(sheet)
                 await query.edit_message_text("🗑️ Data berhasil dihapus!")
                 del saved_messages[orig_msg_id]
                 logger.info(f"✅ Data dihapus via tombol")
@@ -681,7 +601,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data      = pending["data"]
     timestamp = pending["timestamp"]
-    is_edit   = pending.get("is_edit", False)
 
     if step == "jumlah":
         if pilihan == "M":
@@ -698,10 +617,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 sheet = get_sheet()
                 tambah_total_dan_pembatas(sheet, timestamp)
-                if is_edit:
-                    sort_dan_format(sheet, row_baru=row)
-                else:
-                    sheet.append_row(row)
+                sheet.append_row(row)
                 await query.edit_message_text(
                     buat_teks_konfirmasi(data),
                     reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
@@ -740,10 +656,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     sheet = get_sheet()
                     tambah_total_dan_pembatas(sheet, timestamp)
-                    if is_edit:
-                        sort_dan_format(sheet, row_baru=row)
-                    else:
-                        sheet.append_row(row)
+                    sheet.append_row(row)
                     await query.edit_message_text(
                         buat_teks_konfirmasi(data),
                         reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
@@ -775,10 +688,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             sheet = get_sheet()
             tambah_total_dan_pembatas(sheet, timestamp)
-            if is_edit:
-                sort_dan_format(sheet, row_baru=row)
-            else:
-                sheet.append_row(row)
+            sheet.append_row(row)
             await query.edit_message_text(
                 buat_teks_konfirmasi(data),
                 reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
