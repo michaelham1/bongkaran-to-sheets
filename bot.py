@@ -125,6 +125,20 @@ def perlu_konfirmasi_nominal(value):
 def bersihkan_wa(value):
     return re.sub(r'[^0-9]', '', value)
 
+# ── Hitung total deposit - hutang
+def hitung_total_dh(deposit, hutang):
+    try:
+        d = parse_rupiah(deposit) if deposit else 0
+        h = parse_rupiah(hutang) if hutang else 0
+        if d == 0 and h == 0:
+            return ""
+        hasil = d - h
+        if hasil < 0:
+            return f"-Rp {abs(hasil):,.0f}".replace(",", ".")
+        return format_rupiah(str(hasil))
+    except:
+        return ""
+
 def validasi_wa(value):
     if not value or value == "-":
         return True, ""
@@ -170,14 +184,14 @@ def validasi_nominal(value):
 def format_baris_baru(sheet, idx, tipe):
     try:
         if tipe == "pembatas":
-            sheet.merge_cells(f"A{idx}:K{idx}")
-            sheet.format(f"A{idx}:K{idx}", {
+            sheet.merge_cells(f"A{idx}:N{idx}")
+            sheet.format(f"A{idx}:N{idx}", {
                 "horizontalAlignment": "CENTER",
                 "textFormat"         : {"bold": True},
                 "backgroundColor"    : {"red": 0.8, "green": 0.8, "blue": 0.8}
             })
         elif tipe == "total":
-            sheet.format(f"A{idx}:K{idx}", {
+            sheet.format(f"A{idx}:N{idx}", {
                 "textFormat"      : {"bold": True},
                 "backgroundColor" : {"red": 1.0, "green": 0.95, "blue": 0.4}
             })
@@ -239,9 +253,9 @@ def tambah_total_dan_pembatas(sheet, timestamp_sekarang):
         tj_str = format_total_jumlah(total_jumlah)
         tn_str = format_rupiah(str(total_nominal))
 
-        sheet.append_row([label_total, "", "", "", "", "", tj_str, tn_str, "", "", ""])
+        sheet.append_row([label_total, "", "", "", "", "", tj_str, tn_str, "", "", "", "", "", ""])
         format_baris_baru(sheet, total_rows + 1, "total")
-        sheet.append_row([format_label_hari(dt_sekarang)] + [""] * 10)
+        sheet.append_row([format_label_hari(dt_sekarang)] + [""] * 13)
         format_baris_baru(sheet, total_rows + 2, "pembatas")
         logger.info(f"✅ Total + pembatas: {label_total}")
 
@@ -281,6 +295,7 @@ def parse_message(text):
         "jumlah_bongkaran": "-", "nominal": "-",
         "bank_ewallet": "-", "nomor": "-",
         "an": "-", "wa": "-",
+        "deposit": "", "hutang": "",
     }
     for line in text.strip().split("\n"):
         if ":" not in line:
@@ -308,6 +323,10 @@ def parse_message(text):
             data["an"] = value
         elif key in ["nomor whatsapp", "nomor wahtsapp", "no whatsapp", "wa"]:
             data["wa"] = value
+        elif key == "deposit":
+            data["deposit"] = value
+        elif key == "hutang":
+            data["hutang"] = value
     return data
 
 def buat_keyboard_hapus(orig_msg_id, user_id):
@@ -330,7 +349,7 @@ def buat_keyboard_konfirmasi_hapus(orig_msg_id, user_id):
         ),
     ]])
 
-def buat_teks_konfirmasi(data):
+def buat_teks_konfirmasi(data, total):
     return (
         f"✅ Data berhasil dicatat!\n\n"
         f"👤 ID Pengirim   : {data['id_pengirim']}\n"
@@ -342,7 +361,10 @@ def buat_teks_konfirmasi(data):
         f"🏦 Bank/Ewallet  : {data['bank_ewallet']}\n"
         f"🔢 Nomor         : {data['nomor']}\n"
         f"👤 AN            : {data['an']}\n"
-        f"📱 WA            : {data['wa']}"
+        f"📱 WA            : {data['wa']}\n"
+        f"💵 Deposit       : {data['deposit'] or '-'}\n"
+        f"💸 Hutang        : {data['hutang'] or '-'}\n"
+        f"🧾 Total         : {total or '-'}"
     )
 
 async def proses_pesan(msg, context, is_edit=False):
@@ -357,7 +379,6 @@ async def proses_pesan(msg, context, is_edit=False):
     if ":" not in text:
         return
 
-    # ── Tentukan timestamp
     if is_edit and msg.message_id in saved_messages:
         old_info  = saved_messages[msg.message_id]
         timestamp = old_info["timestamp"]
@@ -412,6 +433,15 @@ async def proses_pesan(msg, context, is_edit=False):
     if data["wa"] != "-":
         data["wa"] = bersihkan_wa(data["wa"])
 
+    # ── Format deposit & hutang
+    if data["deposit"]:
+        data["deposit"] = format_rupiah(data["deposit"])
+    if data["hutang"]:
+        data["hutang"] = format_rupiah(data["hutang"])
+
+    # ── Hitung total
+    total = hitung_total_dh(data["deposit"], data["hutang"])
+
     # ── Cek konfirmasi M/B
     jumlah_raw               = data["jumlah_bongkaran"]
     butuh_konfirmasi_jumlah  = perlu_konfirmasi_jumlah(jumlah_raw) if jumlah_raw != "-" else False
@@ -427,6 +457,7 @@ async def proses_pesan(msg, context, is_edit=False):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
             "chat_id"     : chat_id,
+            "total"       : total,
         }
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|jumlah|{msg.message_id}"),
@@ -449,6 +480,7 @@ async def proses_pesan(msg, context, is_edit=False):
             "orig_msg_id" : msg.message_id,
             "bot_msg_id"  : None,
             "chat_id"     : chat_id,
+            "total"       : total,
         }
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("M", callback_data=f"M|nominal|{msg.message_id}"),
@@ -469,6 +501,7 @@ async def proses_pesan(msg, context, is_edit=False):
             data["username_pengirim"], data["no_id"], data["id_penerima"],
             data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
             data["nomor"], data["an"],
+            data["deposit"], data["hutang"], total,
         ]
 
         try:
@@ -478,7 +511,7 @@ async def proses_pesan(msg, context, is_edit=False):
             logger.info(f"✅ Saved | {data['username_pengirim']} | WA: {data['wa']}")
 
             bot_msg = await msg.reply_text(
-                buat_teks_konfirmasi(data),
+                buat_teks_konfirmasi(data, total),
                 reply_markup=buat_keyboard_hapus(msg.message_id, user_id)
             )
             saved_messages[msg.message_id] = {
@@ -601,6 +634,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data      = pending["data"]
     timestamp = pending["timestamp"]
+    total     = pending.get("total", "")
 
     if step == "jumlah":
         if pilihan == "M":
@@ -613,13 +647,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data["username_pengirim"], data["no_id"], data["id_penerima"],
                 data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
                 data["nomor"], data["an"],
+                data["deposit"], data["hutang"], total,
             ]
             try:
                 sheet = get_sheet()
                 tambah_total_dan_pembatas(sheet, timestamp)
                 sheet.append_row(row)
                 await query.edit_message_text(
-                    buat_teks_konfirmasi(data),
+                    buat_teks_konfirmasi(data, total),
                     reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
                 )
                 saved_messages[orig_msg_id] = {
@@ -652,13 +687,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     data["username_pengirim"], data["no_id"], data["id_penerima"],
                     data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
                     data["nomor"], data["an"],
+                    data["deposit"], data["hutang"], total,
                 ]
                 try:
                     sheet = get_sheet()
                     tambah_total_dan_pembatas(sheet, timestamp)
                     sheet.append_row(row)
                     await query.edit_message_text(
-                        buat_teks_konfirmasi(data),
+                        buat_teks_konfirmasi(data, total),
                         reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
                     )
                     saved_messages[orig_msg_id] = {
@@ -684,13 +720,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["username_pengirim"], data["no_id"], data["id_penerima"],
             data["jumlah_bongkaran"], data["nominal"], data["bank_ewallet"],
             data["nomor"], data["an"],
+            data["deposit"], data["hutang"], total,
         ]
         try:
             sheet = get_sheet()
             tambah_total_dan_pembatas(sheet, timestamp)
             sheet.append_row(row)
             await query.edit_message_text(
-                buat_teks_konfirmasi(data),
+                buat_teks_konfirmasi(data, total),
                 reply_markup=buat_keyboard_hapus(orig_msg_id, pending["user_id"])
             )
             saved_messages[orig_msg_id] = {
